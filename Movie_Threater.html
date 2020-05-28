@@ -1,0 +1,288 @@
+</style></head>
+	<body>
+
+<script src="three.min-105.js"></script>
+<script src="OrbitControls.js"></script>
+<script src="dat.gui.js"></script>
+
+<script id="vertShader" type="shader">
+varying vec2 vUv;
+void main() {
+    vUv = vec2( uv.x, 1.0-uv.y );
+    gl_Position = projectionMatrix *
+				  modelViewMatrix * vec4(position, 1.0 );
+				  				  
+	}
+</script>
+
+<script id="fragShader" type="shader">
+precision highp float;
+const int kernelSizeDiv2 = 9;
+uniform sampler2D image;
+uniform vec2 resolution;
+uniform float colorScaleR;
+uniform float colorScaleG;
+uniform float colorScaleB;
+uniform bool invert;
+uniform sampler2D image1;
+uniform vec2 resolution1;
+uniform int kernelSizeDiv21;
+
+varying vec2 vUv;
+void main(void) {
+				vec2 cellSize = 1.0 / resolution.xy;
+				vec2 uv = vUv.xy;
+
+        vec4 textureValue = vec4 ( 0,0,0,0 );
+				for (int i=-kernelSizeDiv2;i<=kernelSizeDiv2;i++)
+					for (int j=-kernelSizeDiv2;j<=kernelSizeDiv2;j++)
+						textureValue += texture2D( image, uv + vec2( float(i)*cellSize.x, float(j)*cellSize.y ) );
+				textureValue /= float ((kernelSizeDiv2*2+1)*(kernelSizeDiv2*2+1));
+				if (invert)
+				{
+					gl_FragColor = vec4(vec3(colorScaleR,colorScaleG,colorScaleB),1.0)*textureValue;
+					gl_FragColor.rgb = vec3 ( 1.0 ) - gl_FragColor.rgb;
+        }
+				else
+				gl_FragColor = vec4(vec3(colorScaleR,colorScaleG,colorScaleB),1.0)*textureValue;
+	}
+	  
+</script>
+
+<script>
+
+
+function IVimageProcessing ( height, width, imageProcessingMaterial )
+{
+		this.height = height;
+		this.width = width;
+		
+        //3 rtt setup
+        this.scene = new THREE.Scene();
+        this.orthoCamera = new THREE.OrthographicCamera(-1,1,1,-1,1/Math.pow( 2, 53 ),1 );
+		scene.background = new THREE.Color( 'black' );
+
+        //4 create a target texture
+        var options = {
+            minFilter: THREE.NearestFilter,
+            magFilter: THREE.NearestFilter,
+            maFilter: THREE.NearestMipmapNearestFilter,
+            format: THREE.RGBAFormat,
+//            type:THREE.FloatType
+            type:THREE.UnsignedByteType
+        };
+        this.rtt = new THREE.WebGLRenderTarget( width, height, options);
+
+        var geom = new THREE.BufferGeometry();
+        geom.addAttribute( 'position', new THREE.BufferAttribute( new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,-1, 0, 1, 1, 0, -1,1,0 ]), 3 ) );
+        geom.addAttribute( 'uv', new THREE.BufferAttribute( new Float32Array([ 0,1, 1,1, 1,0, 0,1, 1,0, 0,0 ]), 2 ) );
+        this.scene.add( new THREE.Mesh( geom, imageProcessingMaterial ) );
+}
+
+function IVprocess ( imageProcessing, renderer )
+{
+	renderer.setRenderTarget( imageProcessing.rtt );
+	renderer.render ( imageProcessing.scene, imageProcessing.orthoCamera ); 	
+	renderer.setRenderTarget( null );
+};
+</script>
+
+<script>
+var camera, controls, scene, renderer, container;
+var plan;
+
+
+// VIDEO AND THE ASSOCIATED TEXTURE
+var video,videoTexture;
+
+var imageProcessing, imageProcessingMaterial;
+
+// GUI
+var gui;
+
+init();
+animate();
+
+function init () {
+	
+    container = document.createElement( 'div' );
+	document.body.appendChild( container );
+	
+	scene = new THREE.Scene();
+
+	renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
+	renderer.autoClear = false;
+	renderer.setPixelRatio( window.devicePixelRatio );
+	renderer.setSize( window.innerWidth, window.innerHeight );
+	renderer.shadowMap.enabled = false;
+
+	container.appendChild( renderer.domElement );
+
+	camera = new THREE.PerspectiveCamera( 55, window.innerWidth / window.innerHeight, 45, 30000);
+	
+    camera.position.z = 900;
+    camera.position.y = 600;
+    
+	controls = new THREE.OrbitControls( camera, renderer.domElement );
+	controls.minDistance = 10000;
+	controls.maxDistance = 14500;
+	
+	controls.addEventListener( 'change', render );
+	controls.update();
+
+	video = document.createElement('video');
+	video.src = 'video.mp4';
+	video.load();
+	video.muted = true;
+ 
+	video.loop = false; // stoping the video to restart
+
+	video.onloadeddata = function () 
+	{ 
+	   videoTexture = new THREE.VideoTexture( video );
+       videoTexture.minFilter = THREE.NearestFilter;
+	   videoTexture.magFilter = THREE.NearestFilter;
+       videoTexture.maFilter = THREE.NearestMipmapNearestFilter; 
+	   videoTexture.generateMipmaps = true; 
+	   videoTexture.format = THREE.RGBFormat;
+	
+	   imageProcessingMaterial = new THREE.ShaderMaterial({
+    	       uniforms: {
+    	                       colorScaleR: {type: 'f', value: true},
+    	                       colorScaleG: {type: 'f', value: true},
+    	                       colorScaleB: {type: 'f', value: true},
+    	                       invert: {type: 'b', value: false},
+        	                   image: {type: 't', value: videoTexture},
+        	                   resolution: {type: '2f', value:  new THREE.Vector2( video.videoWidth, video.videoHeight ) }
+    	                   },
+    	       vertexShader: document.getElementById('vertShader').text,fragmentShader: document.getElementById('fragShader').text,
+	    }); //imageProcessingMaterial ends
+	
+	   imageProcessing = new IVimageProcessing ( video.videoHeight, video.videoWidth, imageProcessingMaterial );
+	   console.log ( imageProcessing.width );
+	
+	   // width, height
+	   var geometry = new THREE.PlaneGeometry( 9450,10400, video.videoHeight/video.videoWidth );
+	   //var material = new THREE.MeshBasicMaterial( { map: imageProcessing.rtt.texture, side : THREE.DoubleSide } ); // changed to create a single plane
+	   var material = new THREE.MeshBasicMaterial( { map: imageProcessing.rtt.texture} );
+	   plan = new THREE.Mesh( geometry, material );
+	   plan.receiveShadow = false;
+	   plan.castShadow = false;
+       plan.position.set(-30,870,-7470);//position set  
+       //plan.material.side = THREE.DoubleSide;
+	   
+	   scene.add( plan );
+
+	   
+	   gui = new dat.GUI();	   
+	   gui.add(imageProcessingMaterial.uniforms.invert , 'value'); 
+	   gui.add(imageProcessingMaterial.uniforms.invert , 'value'); 
+	   gui.add(imageProcessingMaterial.uniforms.invert , 'value'); 
+
+	   video.play();
+
+
+	};//video on load data ends	
+	window.addEventListener( 'resize', onWindowResize, false );
+    
+     let texture_red = new THREE.TextureLoader().load( 'red.jpg');
+     var material = new THREE.MeshBasicMaterial({ map: texture_red });
+        
+     let texture_blue = new THREE.TextureLoader().load( 'blue.jpg');
+     var material2 = new THREE.MeshBasicMaterial( { map: texture_blue } ); 
+    
+    //for top
+        var geometry7 = new THREE.BoxBufferGeometry( 2*1000, 1.5*1000, 0.7*1000 ); // width , height , depth 							
+			//var material7 = new THREE.MeshBasicMaterial( { color: 0xff0000 } );
+            //var material6 = new THREE.MeshBasicMaterial( { color: 0xFFFFFF} );
+            //cube.position.set(0, 1.8, -1)    
+            
+    //for base 
+        var geometry8 = new THREE.BoxBufferGeometry( 2.5*1000, 1*1000, 1.5*1000 ); // width , height , depth  
+            //var material8 = new THREE.MeshBasicMaterial( { color: 0x05F4FD } );
+            //var material9= new THREE.MeshBasicMaterial( { color: 0xFFF233} );
+			// var cube2 = new THREE.Mesh( geometry2, material2 );
+            // cube2.position.set( 0, 0, 0 )            
+            
+           
+            
+    function gchair(x,y,z){
+            let group = new THREE.Group();
+            var xp = -8000
+            if (x % 2 == 0) {
+                    cube = new THREE.Mesh( geometry7, material );//top
+                    cube2 = new THREE.Mesh( geometry8, material2 );//base
+                    
+            }
+            else{
+                    cube = new THREE.Mesh( geometry7, material );
+                    cube2 = new THREE.Mesh( geometry8, material2 );//base
+            }
+            cube.position.set(3*x*1000, 2.2*1000, 1.45*y*1000+1000*y)   // cofficent of x increases the distance between columns            
+            cube2.position.set( 3*x*1000, 1*1000, 1.25*y*1000+1000*y ) // cofficent of y increases the distance between rows
+            cube.rotateX( Math.PI  );
+            cube2.rotateY( Math.PI  );
+            group.add(cube);                
+            group.add( cube2 );
+            group.position.x =xp + x*100 // position in the floor
+            group.position.y = -8000 //distance from ground
+            group.position.z = -5000 // distance from screen
+            return group;                
+                
+            }
+            
+    for (var i = 1; i < 5; i++) {
+                
+        for ( var j = 1; j < 5; j++) {
+                    
+                     scene.add(gchair(i,j,0))
+        }
+            
+    }
+    
+    let materialArray = [];
+    let texture_ft = new THREE.TextureLoader().load( 'screen.bmp');
+    let texture_bk = new THREE.TextureLoader().load( 'EXIT1.jpg');
+    let texture_up = new THREE.TextureLoader().load( 'top.bmp');
+    let texture_dn = new THREE.TextureLoader().load( 'white.jpg');
+    let texture_rt = new THREE.TextureLoader().load( 'side.png');
+    let texture_lf = new THREE.TextureLoader().load( 'side.png');
+          
+        materialArray.push(new THREE.MeshBasicMaterial( { map: texture_ft }));
+        materialArray.push(new THREE.MeshBasicMaterial( { map: texture_bk }));
+        materialArray.push(new THREE.MeshBasicMaterial( { map: texture_up }));
+        materialArray.push(new THREE.MeshBasicMaterial( { map: texture_dn }));
+        materialArray.push(new THREE.MeshBasicMaterial( { map: texture_rt }));
+        materialArray.push(new THREE.MeshBasicMaterial( { map: texture_lf }));
+   
+    for (let i = 0; i < 6; i++)
+       materialArray[i].side = THREE.BackSide;
+    let skyboxGeo = new THREE.BoxGeometry( 15000, 15000, 15000);
+    let skybox = new THREE.Mesh( skyboxGeo, materialArray );
+    skybox.rotateY( Math.PI / 2 ); // Rotation of the cube
+    scene.add( skybox );
+} // function init() ends
+
+function render () {
+	renderer.clear();
+	
+	if (typeof imageProcessing !== 'undefined') 
+		IVprocess ( imageProcessing, renderer );
+	renderer.render( scene, camera );
+	
+}
+
+function animate() {	
+	requestAnimationFrame(animate);
+	controls.update();
+	render();
+}
+
+function onWindowResize () {
+	camera.aspect = ( window.innerWidth / window.innerHeight);
+	camera.updateProjectionMatrix();
+	renderer.setSize( window.innerWidth, window.innerHeight );
+	render();
+}
+
+</script>
